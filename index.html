@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supertram Network Map with Fare Zones</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #231f20;
+    --paper: #ffffff;
+    --zone-a: #e4ebf2;
+    --zone-b: #f3eee4;
+    --zone-num: #a4aeb8;
+    --panel: #f7f2e8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--paper); color: var(--ink); font-family: Figtree, "Helvetica Neue", Arial, sans-serif; }
+  header { padding: 20px 24px 8px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+  header h1 { font-size: 22px; font-weight: 600; margin: 0; }
+  header p { margin: 0; font-size: 14px; color: #5a5a5a; }
+  .layout { display: grid; grid-template-columns: minmax(0, 935px) minmax(260px, 340px); gap: 24px; padding: 8px 24px 40px; max-width: 1340px; }
+  .map { min-width: 0; }
+  .map svg { width: 100%; height: auto; display: block; touch-action: manipulation; }
+  /* side panel: lists the stops you can reach from the selected stop (desktop only) */
+  aside { position: sticky; top: 16px; align-self: start; max-height: calc(100vh - 32px); overflow-y: auto; background: var(--panel); border-radius: 8px; padding: 18px 18px 16px; }
+  aside h2 { font-size: 20px; font-weight: 500; margin: 0 0 8px; }
+  aside p { font-size: 14px; line-height: 1.4; margin: 10px 0 0; }
+  aside .note { color: #5a5a5a; border-top: 1px solid #e3dccd; padding-top: 10px; }
+  aside .note + .note { border-top: 0; padding-top: 0; }
+  ol.reach-list { list-style: none; margin: 12px 0 14px; padding: 0; }
+  ol.reach-list:empty { display: none; }
+  .rl { display: flex; align-items: center; gap: 10px; padding: 5px 8px; border-radius: 6px; font-size: 14px; line-height: 1.3; background: #fff; margin-bottom: 3px; }
+  .rl-lines { flex: 0 0 24px; display: flex; gap: 3px; }  /* fixed width so names line up whether one or two lines serve the stop */
+  .rl-lines i { display: block; width: 10px; height: 10px; border-radius: 50%; }
+  .rl-name { flex: 1 1 auto; }
+  .rl-zone { flex: 0 0 auto; font-size: 12px; font-weight: 600; color: #5f6b77; background: var(--zone-a); border-radius: 10px; padding: 1px 8px; }
+  .rl-zone.two { background: linear-gradient(90deg, var(--zone-a) 50%, var(--zone-b) 50%); }
+  /* SVG text styles */
+  .name { font-size: 23px; font-weight: 500; }
+  .sub { font-size: 18px; font-weight: 400; }
+  .tag-text, .k { font-size: 16px; font-weight: 400; }
+  .h { font-size: 23px; font-weight: 500; }
+  .zone { stroke: #fff; stroke-width: 1.5; stroke-linejoin: round; }
+  .zone-a { fill: var(--zone-a); }
+  .zone-b { fill: var(--zone-b); }
+  .zone-num { font-size: 64px; font-weight: 600; fill: var(--zone-num); letter-spacing: -0.02em; }
+  .zone-num-sm { font-size: 18px; }
+  /* short-journey finder */
+  /* Desktop: sticks to the top of the map column while scrolling. Reserves two lines so the map never shifts. */
+  .status { position: sticky; top: 0; z-index: 5; margin: 0 0 10px; padding: 6px 0; min-height: 54px; font-size: 15px; line-height: 21px; color: #4a4a4a; background: var(--paper); }
+  .status strong { color: var(--ink); font-weight: 600; }
+  .status .clear { margin-left: 8px; font: inherit; font-size: 13px; line-height: 17px; height: 19px; padding: 0 10px; vertical-align: top; color: #094372; background: none; border: 1px solid #094372; border-radius: 10px; cursor: pointer; }  /* shorter than the line box, so it cannot grow the line */
+  /* Phones and tablets: a fixed bar at the bottom of the screen, within thumb reach. */
+  @media (max-width: 1000px) {
+    .status { position: fixed; left: 0; right: 0; bottom: 0; top: auto; margin: 0; min-height: 0; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); font-size: 14px; line-height: 19px; background: rgba(255,255,255,.96); border-top: 1px solid #ddd; box-shadow: 0 -2px 10px rgba(0,0,0,.08); }
+    body { padding-bottom: 96px; }
+  }
+  .stn, .lbl { cursor: pointer; }
+  .stn:focus { outline: none; }
+  .stn, .lbl, .zone, .zone-num { transition: opacity .18s ease, fill .18s ease; }
+  /* Also doubles as a larger invisible tap target around each marker (opacity 0 still receives pointer events). */
+  .halo { fill: rgba(0,0,0,0); stroke: var(--ink); stroke-width: 2.6; stroke-dasharray: 4 3; opacity: 0; transition: opacity .18s ease; pointer-events: fill; }
+  svg.active .stn:not(.reach), svg.active .lbl:not(.reach), svg.active .tag:not(.reach) { opacity: .22; }
+  .tag { transition: opacity .18s ease; }
+  svg.active .stn.origin .halo, .stn:focus-visible .halo { opacity: 1; }
+  svg.active .zone-a:not(.lit), svg.active .zone-b:not(.lit) { fill: #f6f6f5; }
+  svg.active .zone-num:not(.lit) { opacity: .35; }
+  svg.active .zone-a.lit { fill: #d3e0ee; }
+  svg.active .zone-b.lit { fill: #ece2cc; }
+  svg.active .zone-num.lit { fill: #7d8a98; }
+  @media (max-width: 1000px) {
+    .layout { grid-template-columns: 1fr; }
+    aside { display: none; }  /* the fixed status bar does this job on small screens */
+  }
+  @media print {
+    header, aside { display: none; }
+    .layout { padding: 0; display: block; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Supertram network map</h1>
+  <p>Routes, interchanges and fare zones. Based on the Supertram Network Map (April 2026).</p>
+</header>
+<div class="layout">
+  <div class="map">
+    <p class="status" id="status" aria-live="polite">Tap a stop to see every stop you can reach on a short journey (1 or 2 fare zones).</p>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 935.43 1757.48" role="img" aria-labelledby="map-title map-desc" font-family="Figtree, 'Helvetica Neue', Arial, sans-serif">
+<title id="map-title">Sheffield Supertram network map with fare zones</title>
+<desc id="map-desc">Schematic map of the Supertram Blue, Purple, Yellow and Tram Train routes, with the eleven fare zones shown as shaded bands behind the lines.</desc>
+<defs>
+<symbol id="ic-bus" viewBox="0 0 28.35 28.35"><rect width="28.35" height="28.35" rx="2.83" fill="#1475bc"/><g fill="#fff"><path d="M18.8 22.05C18.29 22.05 17.88 21.63 17.88 21.12C17.88 20.61 18.29 20.19 18.8 20.19C19.32 20.19 19.73 20.61 19.73 21.12C19.73 21.63 19.32 22.05 18.8 22.05M14.17 20.23C11.32 20.23 8.83 19.52 8.83 18.09L8.83 14.89C8.83 14.39 9.23 13.99 9.72 13.99L14.17 13.99L18.63 13.99C19.12 13.99 19.52 14.39 19.52 14.89L19.52 18.09C19.52 19.52 17.02 20.23 14.17 20.23M9.54 22.05C9.03 22.05 8.61 21.63 8.61 21.12C8.61 20.61 9.03 20.19 9.54 20.19C10.05 20.19 10.47 20.61 10.47 21.12C10.47 21.63 10.05 22.05 9.54 22.05M9.44 11.22h9.29v1.63h-9.29ZM8.83 6.87C8.83 5.44 11.32 4.73 14.17 4.73C17.02 4.73 19.52 5.44 19.52 6.87L19.52 9.19C19.52 9.68 19.12 10.08 18.63 10.08L14.17 10.08L9.72 10.08C9.23 10.08 8.83 9.68 8.83 9.19L8.83 6.87M14.17 3.48C10.56 3.48 7.4 4.39 7.4 6.19L7.4 8.12L7.4 9.13L7.4 22.01C7.4 22.6 7.88 23.08 8.47 23.08L9.36 23.08L9.36 24.03C9.36 24.49 9.73 24.86 10.19 24.86L10.85 24.86C11.31 24.86 11.68 24.49 11.68 24.03L11.68 23.08L16.66 23.08L16.66 24.03C16.66 24.49 17.04 24.86 17.49 24.86L18.16 24.86C18.61 24.86 18.99 24.49 18.99 24.03L18.99 23.08L19.87 23.08C20.46 23.08 20.94 22.6 20.94 22.01L20.94 9.13L20.94 8.12L20.94 6.19C20.94 4.39 17.78 3.48 14.17 3.48"/></g></symbol>
+<symbol id="ic-train" viewBox="0 0 28.35 28.35"><rect width="28.35" height="28.35" rx="2.83" fill="#e43131"/><g fill="#fff"><path d="M4.88 15.33L9.82 15.33L14.75 13.01L4.88 13.01L4.88 11.27L14.75 11.27L8.36 8.36L12.72 8.36L18.53 11.27L23.47 11.27L23.47 13.01L18.53 13.01L13.59 15.33L23.47 15.33L23.47 17.08L13.59 17.08L19.98 19.98L15.62 19.98L9.82 17.08L4.88 17.08L4.88 15.33"/></g></symbol>
+<symbol id="ic-pr" viewBox="0 0 28.35 28.35"><rect width="28.35" height="28.35" rx="2.83" fill="#2b3594"/><g fill="#fff"><path d="M12.57 12.93C12.11 13.34 11.44 13.55 10.58 13.55L8.05 13.55L8.05 8.46L10.65 8.46C11.46 8.48 12.11 8.73 12.58 9.22C13.04 9.71 13.28 10.36 13.28 11.14C13.28 11.9 13.04 12.51 12.57 12.93M16.04 11.12C16.04 10.19 15.81 9.35 15.37 8.62C14.93 7.89 14.29 7.32 13.47 6.93C12.65 6.53 11.67 6.33 10.58 6.33L6.31 6.33C5.76 6.33 5.32 6.77 5.32 7.31L5.32 21.06C5.32 21.6 5.76 22.04 6.31 22.04L7.07 22.04C7.61 22.04 8.05 21.6 8.05 21.06L8.05 15.69L10.53 15.69C12.25 15.69 13.62 15.27 14.59 14.46C15.55 13.65 16.04 12.52 16.04 11.12"/><path d="M14.54 18.86L16.03 18.86C16.21 18.86 16.35 19.01 16.35 19.19L16.35 19.85C16.35 20.03 16.21 20.17 16.03 20.17L14.54 20.17L14.54 21.9C14.54 22.08 14.39 22.22 14.21 22.22L13.48 22.22C13.3 22.22 13.16 22.08 13.16 21.9L13.16 20.17L11.66 20.17C11.48 20.17 11.34 20.03 11.34 19.85L11.34 19.19C11.34 19.01 11.48 18.86 11.66 18.86L13.16 18.86L13.16 17.22C13.16 17.04 13.3 16.9 13.48 16.9L14.21 16.9C14.39 16.9 14.54 17.04 14.54 17.22L14.54 18.86"/><path d="M19.47 17.68L20.88 17.68C21.33 17.68 21.67 17.57 21.91 17.34C22.15 17.12 22.27 16.81 22.27 16.41C22.27 16.01 22.16 15.69 21.93 15.46C21.7 15.23 21.35 15.12 20.88 15.12L19.47 15.12L19.47 17.68M20.87 19.1L19.47 19.1L19.47 21.76C19.47 22.02 19.26 22.22 19 22.22L18.17 22.22C17.92 22.22 17.71 22.02 17.71 21.76L17.71 14.16C17.71 13.9 17.92 13.7 18.17 13.7L20.88 13.7C21.89 13.7 22.66 13.92 23.21 14.37C23.76 14.82 24.03 15.45 24.03 16.27C24.03 16.85 23.9 17.34 23.65 17.73C23.4 18.12 23.02 18.43 22.51 18.66L24.18 21.88C24.26 22.04 24.14 22.22 23.97 22.22L22.64 22.22C22.53 22.22 22.44 22.17 22.39 22.07L20.87 19.1"/></g></symbol>
+<symbol id="ic-cycle" viewBox="0 0 28.35 28.35"><rect width="28.35" height="28.35" rx="2.83" fill="#05a1a5"/><g fill="#fff"><path d="M6.66 5.4L7.76 5.4C8.11 5.4 8.38 5.51 8.58 5.72C8.78 5.92 8.88 6.19 8.88 6.53C8.88 6.86 8.78 7.11 8.58 7.28C8.39 7.46 8.1 7.54 7.73 7.54L6.66 7.54L6.66 5.4M5.78 11.58L6.13 11.58C6.42 11.58 6.66 11.34 6.66 11.05L6.66 8.69L7.71 8.69C8.52 8.69 9.15 8.49 9.61 8.11C10.07 7.72 10.3 7.19 10.3 6.52C10.3 6.08 10.2 5.68 9.99 5.34C9.78 4.99 9.48 4.72 9.09 4.53C8.7 4.35 8.24 4.25 7.73 4.25L5.78 4.25C5.49 4.25 5.25 4.49 5.25 4.78L5.25 11.05C5.25 11.34 5.49 11.58 5.78 11.58"/><path d="M20.43 23.68C18.63 23.68 17.18 22.22 17.18 20.43C17.18 19.19 17.87 18.11 18.9 17.56C19.19 18.62 19.42 19.44 19.48 19.67C19.66 20.39 20.16 20.81 20.22 20.85C20.32 20.94 20.45 20.98 20.58 20.98C20.74 20.98 20.91 20.91 21.02 20.77C21.23 20.52 21.19 20.16 20.95 19.95C20.95 19.95 20.7 19.73 20.61 19.38C20.54 19.14 20.31 18.29 20.01 17.21C20.15 17.19 20.29 17.18 20.43 17.18C22.22 17.18 23.68 18.63 23.68 20.43C23.68 22.22 22.22 23.68 20.43 23.68M7.9 23.68C6.11 23.68 4.65 22.22 4.65 20.43C4.65 18.63 6.11 17.18 7.9 17.18C8.28 17.18 8.64 17.24 8.98 17.36L7.11 20.07C6.99 20.24 6.97 20.48 7.08 20.67C7.18 20.86 7.37 20.98 7.59 20.98L11.1 20.98C10.84 22.51 9.51 23.68 7.9 23.68M11.66 15.52L12.84 19.82L12.27 19.82C12.11 18.67 11.51 17.67 10.65 16.98L11.66 15.52M11.09 19.82L8.7 19.82L9.99 17.94C10.55 18.41 10.95 19.07 11.09 19.82M13.85 19.13L12.64 14.71L17.09 14.71L13.85 19.13M20.43 16.01C20.18 16.01 19.93 16.04 19.69 16.08C19.23 14.4 18.7 12.53 18.42 11.52L19.96 11.52C21.12 11.52 21.12 12.19 21.12 12.44C21.12 13.4 20.67 13.4 20.45 13.4C20.13 13.4 19.87 13.66 19.87 13.98C19.87 14.3 20.13 14.56 20.45 14.56C21.34 14.56 22.28 14 22.28 12.44C22.28 11.16 21.39 10.36 19.96 10.36L17.66 10.36C17.47 10.36 17.3 10.44 17.19 10.59C17.08 10.73 17.05 10.92 17.1 11.09C17.1 11.12 17.4 12.18 17.78 13.55L12.32 13.55L12.06 12.62L13.44 12.12C13.64 12.04 13.77 11.83 13.73 11.61C13.69 11.39 13.5 11.23 13.28 11.23L11.02 11.23C10.51 11.23 10.1 11.65 10.1 12.16L10.1 12.67C10.1 12.82 10.17 12.96 10.29 13.05C10.37 13.1 10.46 13.13 10.56 13.13C10.61 13.13 10.66 13.12 10.71 13.1L10.97 13.01L11.25 14.06L9.65 16.38C9.12 16.14 8.52 16.01 7.9 16.01C5.46 16.01 3.48 17.99 3.48 20.43C3.48 22.87 5.46 24.84 7.9 24.84C10.15 24.84 12 23.16 12.28 20.98L13.64 20.98C13.83 20.98 14 20.9 14.11 20.75L18.22 15.13C18.34 15.56 18.46 16 18.58 16.42C17.07 17.12 16.01 18.65 16.01 20.43C16.01 22.87 17.99 24.84 20.43 24.84C22.87 24.84 24.84 22.87 24.84 20.43C24.84 17.99 22.87 16.01 20.43 16.01"/></g></symbol>
+<symbol id="ic-stadium" viewBox="0 0 28.35 28.35"><rect width="28.35" height="28.35" rx="2.83" fill="#00716f"/><g fill="#fff"><path d="M14.17 15.46C9.71 15.46 7.4 14.4 7.17 13.95C7.4 13.5 9.71 12.44 14.17 12.44C18.63 12.44 20.94 13.5 21.18 13.95C20.94 14.4 18.63 15.46 14.17 15.46M17.89 11.08L17.89 9.18C18.32 9.22 18.75 9.14 19.15 8.94L19.65 8.69C20.39 8.32 21.27 8.34 21.98 8.75L21.98 5.47C21.27 5.06 20.39 5.04 19.65 5.41L19.15 5.66C18.37 6.05 17.44 5.98 16.74 5.47L16.74 7.93L16.73 7.93L16.73 10.94C15.82 10.85 14.93 10.81 14.17 10.81C12.69 10.81 10.75 10.95 9.07 11.35L9.07 9.18C9.5 9.22 9.93 9.14 10.33 8.94L10.83 8.69C11.57 8.32 12.45 8.34 13.16 8.75L13.16 5.47C12.45 5.06 11.57 5.04 10.83 5.41L10.33 5.66C9.55 6.05 8.62 5.98 7.92 5.47L7.92 7.93L7.91 7.93L7.91 11.68C6.53 12.16 5.53 12.89 5.53 13.95C5.53 14.03 5.54 14.11 5.55 14.19C5.64 16.33 6.21 18.56 7.1 21.01C7.11 21.01 7.11 21.02 7.11 21.02C7.56 22.06 9.73 22.57 11.83 22.77L11.83 19.61C11.83 19.23 12.14 18.92 12.52 18.92L15.82 18.92C16.2 18.92 16.52 19.23 16.52 19.61L16.52 22.77C18.61 22.57 20.79 22.06 21.23 21.01C21.24 21.01 21.24 21.01 21.24 21.01C21.24 21.01 21.24 21 21.24 21C21.25 20.97 21.27 20.93 21.28 20.9C22.14 18.5 22.7 16.32 22.79 14.22C22.8 14.13 22.81 14.04 22.81 13.95C22.81 12.31 20.43 11.47 17.89 11.08"/></g></symbol>
+<symbol id="ic-uni" viewBox="0 0 28.35 28.35"><rect width="28.35" height="28.35" rx="2.83" fill="#87452b"/><g fill="#fff"><path d="M23.79 10.17L14.57 6.63C14.31 6.53 14.03 6.53 13.77 6.63L4.55 10.18C4.32 10.27 4.3 10.47 4.3 10.55C4.3 10.63 4.32 10.83 4.55 10.92L8.13 12.3L13.72 14.45C14.01 14.57 14.33 14.57 14.62 14.45L20.21 12.29L21.38 11.84L21.38 16.2C21.38 16.44 21.7 16.52 21.81 16.31L22.22 15.52C22.26 15.45 22.35 15.45 22.39 15.52L22.8 16.31C22.91 16.52 23.23 16.44 23.23 16.2L23.23 11.13L23.79 10.91C24.02 10.82 24.05 10.62 24.05 10.54C24.05 10.46 24.02 10.26 23.79 10.17"/><path d="M14.17 16.16C13.82 16.16 13.47 16.1 13.13 15.97L8.13 14.04L8.13 19.07C8.13 20.36 10.84 21.41 14.17 21.41C17.51 21.41 20.21 20.36 20.21 19.07L20.21 14.04L15.21 15.97C14.87 16.1 14.52 16.16 14.17 16.16"/></g></symbol>
+<symbol id="ic-hospital" viewBox="0 0 28.35 28.35"><rect width="28.35" height="28.35" rx="2.83" fill="#0079c1"/><g fill="#fff"><path d="M20.51 22.31L17.54 22.31C17.28 22.31 17.07 22.1 17.07 21.84L17.07 15.51L11.3 15.51L11.3 21.84C11.3 22.1 11.09 22.31 10.83 22.31L7.84 22.31C7.58 22.31 7.38 22.1 7.38 21.84L7.38 6.51C7.38 6.25 7.58 6.04 7.84 6.04L10.83 6.04C11.09 6.04 11.3 6.25 11.3 6.51L11.3 12.5L17.07 12.5L17.07 6.51C17.07 6.25 17.28 6.04 17.54 6.04L20.51 6.04C20.76 6.04 20.97 6.25 20.97 6.51L20.97 21.84C20.97 22.1 20.76 22.31 20.51 22.31"/></g></symbol>
+</defs>
+<g id="zones">
+<path class="zone zone-a" data-zone="1" d="M150 0 L935.43 0 L935.43 306.25 L300 306.25 L300 125 L150 125Z"/>
+<path class="zone zone-b" data-zone="2" d="M300 306.25 L935.43 306.25 L935.43 425.25 L300 425.25Z"/>
+<path class="zone zone-a" data-zone="3" d="M300 425.25 L935.43 425.25 L935.43 756.95 L467 756.95 L467 827.95 L0 827.95 L0 625 L300 625Z"/>
+<path class="zone zone-b" data-zone="4" d="M467 756.95 L935.43 756.95 L935.43 836.3 L467 836.3Z"/>
+<path class="zone zone-a" data-zone="5" d="M467 836.3 L935.43 836.3 L935.43 986.55 L467 986.55Z"/>
+<path class="zone zone-b" data-zone="6" d="M467 986.55 L935.43 986.55 L935.43 1268 L583 1268 L583 1136.8 L467 1136.8Z"/>
+<path class="zone zone-a" data-zone="7" d="M467 1136.8 L583 1136.8 L583 1268 L935.43 1268 L935.43 1425 L467 1425Z"/>
+<path class="zone zone-b" data-zone="8" d="M0 827.95 L467 827.95 L467 1017.85 L0 1017.85Z"/>
+<path class="zone zone-a" data-zone="9" d="M0 1017.85 L467 1017.85 L467 1306.85 L0 1306.85Z"/>
+<path class="zone zone-b" data-zone="10" d="M0 1306.85 L467 1306.85 L467 1544.95 L0 1544.95Z"/>
+<path class="zone zone-a" data-zone="11" d="M0 1544.95 L467 1544.95 L467 1757.48 L0 1757.48Z"/>
+<text class="zone-num" x="345" y="232" text-anchor="middle" dominant-baseline="central">1</text>
+<text class="zone-num" x="345" y="366" text-anchor="middle" dominant-baseline="central">2</text>
+<text class="zone-num" x="345" y="520" text-anchor="middle" dominant-baseline="central">3</text>
+<text class="zone-num" x="885" y="797" text-anchor="middle" dominant-baseline="central">4</text>
+<text class="zone-num" x="885" y="912" text-anchor="middle" dominant-baseline="central">5</text>
+<text class="zone-num" x="885" y="1122" text-anchor="middle" dominant-baseline="central">6</text>
+<text class="zone-num" x="885" y="1300" text-anchor="middle" dominant-baseline="central">7</text>
+<text class="zone-num" x="62" y="940" text-anchor="middle" dominant-baseline="central">8</text>
+<text class="zone-num" x="62" y="1200" text-anchor="middle" dominant-baseline="central">9</text>
+<text class="zone-num" x="62" y="1425" text-anchor="middle" dominant-baseline="central">10</text>
+<text class="zone-num" x="62" y="1650" text-anchor="middle" dominant-baseline="central">11</text>
+</g>
+<g id="lines" fill="none" stroke-width="11.34" stroke-linecap="round" stroke-linejoin="round">
+<path d="M396.85 756.94L396.85 1737.73" stroke="#005288"/>
+<path d="M453.54 170.17L453.54 150.33C453.54 139.37 444.66 130.49 433.7 130.49L425.2 130.49" stroke="#005288"/>
+<path d="M396.85 90.8L396.85 110.64C396.85 121.6 405.73 130.49 416.69 130.49L425.2 130.49" stroke="#005288"/>
+<path d="M396.85 756.94L396.85 737.1C396.85 726.14 405.73 717.26 416.69 717.26L425.2 717.26" stroke="#005288"/>
+<path d="M453.54 677.57L453.54 688.91C453.54 704.57 440.85 717.26 425.2 717.26" stroke="#005288"/>
+<path d="M453.54 170.17L453.54 682.42" stroke="#005288"/>
+<path d="M425.2 538.67L425.2 657.73" stroke="#872175"/>
+<path d="M368.5 728.6L368.5 717.26C368.5 701.6 381.19 688.91 396.85 688.91" stroke="#872175"/>
+<path d="M425.2 649.23L425.2 669.07C425.2 680.03 416.31 688.91 405.35 688.91L396.85 688.91" stroke="#872175"/>
+<path d="M368.5 728.6L368.5 1136.91" stroke="#872175"/>
+<path d="M311.81 1218.69L311.81 1251.72" stroke="#872175"/>
+<path d="M311.81 1216.29L311.81 1196.44C311.81 1185.48 320.7 1176.6 331.65 1176.6L340.16 1176.6" stroke="#872175"/>
+<path d="M368.5 1136.92L368.5 1156.76C368.5 1167.72 359.62 1176.6 348.66 1176.6L340.16 1176.6" stroke="#872175"/>
+<path d="M510.24 538.67L510.24 649.13" stroke="#404041"/>
+<path d="M566.93 728.6L566.93 717.26C566.93 701.6 554.24 688.91 538.58 688.91" stroke="#404041"/>
+<path d="M510.24 649.23L510.24 669.07C510.24 680.03 519.12 688.91 530.08 688.91L538.58 688.91" stroke="#404041"/>
+<path d="M566.93 728.6L566.93 1393.09" stroke="#404041"/>
+<path d="M566.93 1180.72L566.93 1194.89" stroke="#fff"/>
+<path d="M538.58 756.94L538.58 737.1C538.58 726.14 529.7 717.26 518.74 717.26L510.24 717.26" stroke="#fdb924"/>
+<path d="M481.89 677.57L481.89 688.91C481.89 704.57 494.58 717.26 510.24 717.26" stroke="#fdb924"/>
+<path d="M481.89 19.93L481.89 680.41" stroke="#fdb924"/>
+<path d="M538.58 756.94L538.58 1148.12" stroke="#fdb924"/>
+<path d="M623.62 1227.49L623.62 1207.65C623.62 1196.69 614.74 1187.81 603.78 1187.81L595.28 1187.81" stroke="#fdb924"/>
+<path d="M538.58 1148.12L538.58 1167.97C538.58 1178.92 547.47 1187.81 558.42 1187.81L566.93 1187.81" stroke="#fdb924"/>
+<path d="M595.28 1187.81L566.93 1187.81" stroke="#fdb924"/>
+</g>
+<g id="stations">
+<g class="stn" data-name="Middlewood" tabindex="0" role="button" aria-label="Middlewood: show stops within a short journey"><rect class="halo" x="464.89" y="2.95" width="34" height="34" rx="17"/><circle cx="481.89" cy="19.95" r="11.34" fill="#231f20"/><circle cx="481.89" cy="19.95" r="10.2" fill="#fff"/><circle cx="481.89" cy="19.95" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Leppings Lane" tabindex="0" role="button" aria-label="Leppings Lane: show stops within a short journey"><rect class="halo" x="464.89" y="42.65" width="34" height="34" rx="17"/><circle cx="481.89" cy="59.65" r="11.34" fill="#231f20"/><circle cx="481.89" cy="59.65" r="10.2" fill="#fff"/><circle cx="481.89" cy="59.65" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Malin Bridge" tabindex="0" role="button" aria-label="Malin Bridge: show stops within a short journey"><rect class="halo" x="379.85" y="73.8" width="34" height="34" rx="17"/><circle cx="396.85" cy="90.8" r="11.34" fill="#231f20"/><circle cx="396.85" cy="90.8" r="10.2" fill="#fff"/><circle cx="396.85" cy="90.8" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Hillsborough Park" tabindex="0" role="button" aria-label="Hillsborough Park: show stops within a short journey"><rect class="halo" x="464.89" y="113.45" width="34" height="34" rx="17"/><circle cx="481.89" cy="130.45" r="11.34" fill="#231f20"/><circle cx="481.89" cy="130.45" r="10.2" fill="#fff"/><circle cx="481.89" cy="130.45" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Hillsborough" tabindex="0" role="button" aria-label="Hillsborough: show stops within a short journey"><rect class="halo" x="436.54" y="153.15" width="62.35" height="34" rx="17"/><rect x="453.54" y="164.48" width="28.35" height="11.34" fill="#231f20"/><circle cx="453.54" cy="170.15" r="11.34" fill="#231f20"/><circle cx="481.89" cy="170.15" r="11.34" fill="#231f20"/><rect x="453.54" y="165.61" width="28.35" height="9.08" fill="#fff"/><circle cx="453.54" cy="170.15" r="10.2" fill="#fff"/><circle cx="481.89" cy="170.15" r="10.2" fill="#fff"/><circle cx="453.54" cy="170.15" r="5.67" fill="#005288"/><circle cx="481.89" cy="170.15" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Bamforth Street" tabindex="0" role="button" aria-label="Bamforth Street: show stops within a short journey"><rect class="halo" x="436.54" y="209.85" width="62.35" height="34" rx="17"/><circle cx="453.54" cy="226.85" r="11.34" fill="#231f20"/><circle cx="481.89" cy="226.85" r="11.34" fill="#231f20"/><circle cx="453.54" cy="226.85" r="10.2" fill="#fff"/><circle cx="481.89" cy="226.85" r="10.2" fill="#fff"/><circle cx="453.54" cy="226.85" r="5.67" fill="#005288"/><circle cx="481.89" cy="226.85" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Langsett/Primrose View" tabindex="0" role="button" aria-label="Langsett/Primrose View: show stops within a short journey"><rect class="halo" x="436.54" y="249.55" width="62.35" height="34" rx="17"/><circle cx="453.54" cy="266.55" r="11.34" fill="#231f20"/><circle cx="481.89" cy="266.55" r="11.34" fill="#231f20"/><circle cx="453.54" cy="266.55" r="10.2" fill="#fff"/><circle cx="481.89" cy="266.55" r="10.2" fill="#fff"/><circle cx="453.54" cy="266.55" r="5.67" fill="#005288"/><circle cx="481.89" cy="266.55" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Infirmary Road" tabindex="0" role="button" aria-label="Infirmary Road: show stops within a short journey"><rect class="halo" x="436.54" y="289.25" width="62.35" height="34" rx="17"/><circle cx="453.54" cy="306.25" r="11.34" fill="#231f20"/><circle cx="481.89" cy="306.25" r="11.34" fill="#231f20"/><circle cx="453.54" cy="306.25" r="10.2" fill="#fff"/><circle cx="481.89" cy="306.25" r="10.2" fill="#fff"/><circle cx="453.54" cy="306.25" r="5.67" fill="#005288"/><circle cx="481.89" cy="306.25" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Shalesmoor for Kelham Island" tabindex="0" role="button" aria-label="Shalesmoor for Kelham Island: show stops within a short journey"><rect class="halo" x="436.54" y="328.85" width="62.35" height="34" rx="17"/><circle cx="453.54" cy="345.85" r="11.34" fill="#231f20"/><circle cx="481.89" cy="345.85" r="11.34" fill="#231f20"/><circle cx="453.54" cy="345.85" r="10.2" fill="#fff"/><circle cx="481.89" cy="345.85" r="10.2" fill="#fff"/><circle cx="453.54" cy="345.85" r="5.67" fill="#005288"/><circle cx="481.89" cy="345.85" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Netherthorpe Road" tabindex="0" role="button" aria-label="Netherthorpe Road: show stops within a short journey"><rect class="halo" x="436.54" y="368.55" width="62.35" height="34" rx="17"/><circle cx="453.54" cy="385.55" r="11.34" fill="#231f20"/><circle cx="481.89" cy="385.55" r="11.34" fill="#231f20"/><circle cx="453.54" cy="385.55" r="10.2" fill="#fff"/><circle cx="481.89" cy="385.55" r="10.2" fill="#fff"/><circle cx="453.54" cy="385.55" r="5.67" fill="#005288"/><circle cx="481.89" cy="385.55" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="University of Sheffield" tabindex="0" role="button" aria-label="University of Sheffield: show stops within a short journey"><rect class="halo" x="436.54" y="408.25" width="62.35" height="34" rx="17"/><circle cx="453.54" cy="425.25" r="11.34" fill="#231f20"/><circle cx="481.89" cy="425.25" r="11.34" fill="#231f20"/><circle cx="453.54" cy="425.25" r="10.2" fill="#fff"/><circle cx="481.89" cy="425.25" r="10.2" fill="#fff"/><circle cx="453.54" cy="425.25" r="5.67" fill="#005288"/><circle cx="481.89" cy="425.25" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="West Street" tabindex="0" role="button" aria-label="West Street: show stops within a short journey"><rect class="halo" x="436.54" y="447.95" width="62.35" height="34" rx="17"/><circle cx="453.54" cy="464.95" r="11.34" fill="#231f20"/><circle cx="481.89" cy="464.95" r="11.34" fill="#231f20"/><circle cx="453.54" cy="464.95" r="10.2" fill="#fff"/><circle cx="481.89" cy="464.95" r="10.2" fill="#fff"/><circle cx="453.54" cy="464.95" r="5.67" fill="#005288"/><circle cx="481.89" cy="464.95" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="City Hall" tabindex="0" role="button" aria-label="City Hall: show stops within a short journey"><rect class="halo" x="436.54" y="487.65" width="62.35" height="34" rx="17"/><circle cx="453.54" cy="504.65" r="11.34" fill="#231f20"/><circle cx="481.89" cy="504.65" r="11.34" fill="#231f20"/><circle cx="453.54" cy="504.65" r="10.2" fill="#fff"/><circle cx="481.89" cy="504.65" r="10.2" fill="#fff"/><circle cx="453.54" cy="504.65" r="5.67" fill="#005288"/><circle cx="481.89" cy="504.65" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Cathedral" tabindex="0" role="button" aria-label="Cathedral: show stops within a short journey"><rect class="halo" x="408.2" y="527.35" width="119.04" height="34" rx="17"/><rect x="425.2" y="538.68" width="85.04" height="11.34" fill="#231f20"/><circle cx="425.2" cy="544.35" r="11.34" fill="#231f20"/><circle cx="453.54" cy="544.35" r="11.34" fill="#231f20"/><circle cx="481.89" cy="544.35" r="11.34" fill="#231f20"/><circle cx="510.24" cy="544.35" r="11.34" fill="#231f20"/><rect x="425.2" y="539.81" width="85.04" height="9.08" fill="#fff"/><circle cx="425.2" cy="544.35" r="10.2" fill="#fff"/><circle cx="453.54" cy="544.35" r="10.2" fill="#fff"/><circle cx="481.89" cy="544.35" r="10.2" fill="#fff"/><circle cx="510.24" cy="544.35" r="10.2" fill="#fff"/><circle cx="425.2" cy="544.35" r="5.67" fill="#872175"/><circle cx="453.54" cy="544.35" r="5.67" fill="#005288"/><circle cx="481.89" cy="544.35" r="5.67" fill="#fdb924"/><circle cx="510.24" cy="544.35" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Castle Square" tabindex="0" role="button" aria-label="Castle Square: show stops within a short journey"><rect class="halo" x="408.2" y="567.05" width="119.04" height="34" rx="17"/><circle cx="425.2" cy="584.05" r="11.34" fill="#231f20"/><circle cx="453.54" cy="584.05" r="11.34" fill="#231f20"/><circle cx="481.89" cy="584.05" r="11.34" fill="#231f20"/><circle cx="510.24" cy="584.05" r="11.34" fill="#231f20"/><circle cx="425.2" cy="584.05" r="10.2" fill="#fff"/><circle cx="453.54" cy="584.05" r="10.2" fill="#fff"/><circle cx="481.89" cy="584.05" r="10.2" fill="#fff"/><circle cx="510.24" cy="584.05" r="10.2" fill="#fff"/><circle cx="425.2" cy="584.05" r="5.67" fill="#872175"/><circle cx="453.54" cy="584.05" r="5.67" fill="#005288"/><circle cx="481.89" cy="584.05" r="5.67" fill="#fdb924"/><circle cx="510.24" cy="584.05" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Fitzalan Square" tabindex="0" role="button" aria-label="Fitzalan Square: show stops within a short journey"><rect class="halo" x="408.2" y="606.65" width="119.04" height="34" rx="17"/><rect x="425.2" y="617.98" width="85.04" height="11.34" fill="#231f20"/><circle cx="425.2" cy="623.65" r="11.34" fill="#231f20"/><circle cx="453.54" cy="623.65" r="11.34" fill="#231f20"/><circle cx="481.89" cy="623.65" r="11.34" fill="#231f20"/><circle cx="510.24" cy="623.65" r="11.34" fill="#231f20"/><rect x="425.2" y="619.11" width="85.04" height="9.08" fill="#fff"/><circle cx="425.2" cy="623.65" r="10.2" fill="#fff"/><circle cx="453.54" cy="623.65" r="10.2" fill="#fff"/><circle cx="481.89" cy="623.65" r="10.2" fill="#fff"/><circle cx="510.24" cy="623.65" r="10.2" fill="#fff"/><circle cx="425.2" cy="623.65" r="5.67" fill="#872175"/><circle cx="453.54" cy="623.65" r="5.67" fill="#005288"/><circle cx="481.89" cy="623.65" r="5.67" fill="#fdb924"/><circle cx="510.24" cy="623.65" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Sheffield Station" tabindex="0" role="button" aria-label="Sheffield Station: show stops within a short journey"><rect class="halo" x="351.5" y="740.05" width="62.35" height="34" rx="17"/><circle cx="368.5" cy="757.05" r="11.34" fill="#231f20"/><circle cx="396.85" cy="757.05" r="11.34" fill="#231f20"/><circle cx="368.5" cy="757.05" r="10.2" fill="#fff"/><circle cx="396.85" cy="757.05" r="10.2" fill="#fff"/><circle cx="368.5" cy="757.05" r="5.67" fill="#872175"/><circle cx="396.85" cy="757.05" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Granville Road" tabindex="0" role="button" aria-label="Granville Road: show stops within a short journey"><rect class="halo" x="351.5" y="810.95" width="62.35" height="34" rx="17"/><circle cx="368.5" cy="827.95" r="11.34" fill="#231f20"/><circle cx="396.85" cy="827.95" r="11.34" fill="#231f20"/><circle cx="368.5" cy="827.95" r="10.2" fill="#fff"/><circle cx="396.85" cy="827.95" r="10.2" fill="#fff"/><circle cx="368.5" cy="827.95" r="5.67" fill="#872175"/><circle cx="396.85" cy="827.95" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Park Grange Croft" tabindex="0" role="button" aria-label="Park Grange Croft: show stops within a short journey"><rect class="halo" x="351.5" y="881.8" width="62.35" height="34" rx="17"/><circle cx="368.5" cy="898.8" r="11.34" fill="#231f20"/><circle cx="396.85" cy="898.8" r="11.34" fill="#231f20"/><circle cx="368.5" cy="898.8" r="10.2" fill="#fff"/><circle cx="396.85" cy="898.8" r="10.2" fill="#fff"/><circle cx="368.5" cy="898.8" r="5.67" fill="#872175"/><circle cx="396.85" cy="898.8" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Park Grange" tabindex="0" role="button" aria-label="Park Grange: show stops within a short journey"><rect class="halo" x="351.5" y="921.5" width="62.35" height="34" rx="17"/><circle cx="368.5" cy="938.5" r="11.34" fill="#231f20"/><circle cx="396.85" cy="938.5" r="11.34" fill="#231f20"/><circle cx="368.5" cy="938.5" r="10.2" fill="#fff"/><circle cx="396.85" cy="938.5" r="10.2" fill="#fff"/><circle cx="368.5" cy="938.5" r="5.67" fill="#872175"/><circle cx="396.85" cy="938.5" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Arbourthorne Road" tabindex="0" role="button" aria-label="Arbourthorne Road: show stops within a short journey"><rect class="halo" x="351.5" y="961.15" width="62.35" height="34" rx="17"/><circle cx="368.5" cy="978.15" r="11.34" fill="#231f20"/><circle cx="396.85" cy="978.15" r="11.34" fill="#231f20"/><circle cx="368.5" cy="978.15" r="10.2" fill="#fff"/><circle cx="396.85" cy="978.15" r="10.2" fill="#fff"/><circle cx="368.5" cy="978.15" r="5.67" fill="#872175"/><circle cx="396.85" cy="978.15" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Spring Lane" tabindex="0" role="button" aria-label="Spring Lane: show stops within a short journey"><rect class="halo" x="351.5" y="1000.85" width="62.35" height="34" rx="17"/><circle cx="368.5" cy="1017.85" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1017.85" r="11.34" fill="#231f20"/><circle cx="368.5" cy="1017.85" r="10.2" fill="#fff"/><circle cx="396.85" cy="1017.85" r="10.2" fill="#fff"/><circle cx="368.5" cy="1017.85" r="5.67" fill="#872175"/><circle cx="396.85" cy="1017.85" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Manor Top" tabindex="0" role="button" aria-label="Manor Top: show stops within a short journey"><rect class="halo" x="351.5" y="1040.55" width="62.35" height="34" rx="17"/><circle cx="368.5" cy="1057.55" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1057.55" r="11.34" fill="#231f20"/><circle cx="368.5" cy="1057.55" r="10.2" fill="#fff"/><circle cx="396.85" cy="1057.55" r="10.2" fill="#fff"/><circle cx="368.5" cy="1057.55" r="5.67" fill="#872175"/><circle cx="396.85" cy="1057.55" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Hollinsend" tabindex="0" role="button" aria-label="Hollinsend: show stops within a short journey"><rect class="halo" x="351.5" y="1080.25" width="62.35" height="34" rx="17"/><circle cx="368.5" cy="1097.25" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1097.25" r="11.34" fill="#231f20"/><circle cx="368.5" cy="1097.25" r="10.2" fill="#fff"/><circle cx="396.85" cy="1097.25" r="10.2" fill="#fff"/><circle cx="368.5" cy="1097.25" r="5.67" fill="#872175"/><circle cx="396.85" cy="1097.25" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Gleadless Townend" tabindex="0" role="button" aria-label="Gleadless Townend: show stops within a short journey"><rect class="halo" x="351.5" y="1119.9" width="62.35" height="34" rx="17"/><rect x="368.5" y="1131.23" width="28.35" height="11.34" fill="#231f20"/><circle cx="368.5" cy="1136.9" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1136.9" r="11.34" fill="#231f20"/><rect x="368.5" y="1132.36" width="28.35" height="9.08" fill="#fff"/><circle cx="368.5" cy="1136.9" r="10.2" fill="#fff"/><circle cx="396.85" cy="1136.9" r="10.2" fill="#fff"/><circle cx="368.5" cy="1136.9" r="5.67" fill="#872175"/><circle cx="396.85" cy="1136.9" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Herdings/" tabindex="0" role="button" aria-label="Herdings/Leighton Road: show stops within a short journey"><rect class="halo" x="294.8" y="1199.15" width="34" height="34" rx="17"/><circle cx="311.8" cy="1216.15" r="11.34" fill="#231f20"/><circle cx="311.8" cy="1216.15" r="10.2" fill="#fff"/><circle cx="311.8" cy="1216.15" r="5.67" fill="#872175"/></g>
+<g class="stn" data-name="Herdings Park" tabindex="0" role="button" aria-label="Herdings Park: show stops within a short journey"><rect class="halo" x="294.8" y="1238.85" width="34" height="34" rx="17"/><circle cx="311.8" cy="1255.85" r="11.34" fill="#231f20"/><circle cx="311.8" cy="1255.85" r="10.2" fill="#fff"/><circle cx="311.8" cy="1255.85" r="5.67" fill="#872175"/></g>
+<g class="stn" data-name="White Lane" tabindex="0" role="button" aria-label="White Lane: show stops within a short journey"><rect class="halo" x="379.85" y="1289.85" width="34" height="34" rx="17"/><circle cx="396.85" cy="1306.85" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1306.85" r="10.2" fill="#fff"/><circle cx="396.85" cy="1306.85" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Birley Lane" tabindex="0" role="button" aria-label="Birley Lane: show stops within a short journey"><rect class="halo" x="379.85" y="1329.55" width="34" height="34" rx="17"/><circle cx="396.85" cy="1346.55" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1346.55" r="10.2" fill="#fff"/><circle cx="396.85" cy="1346.55" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Birley Moor Road" tabindex="0" role="button" aria-label="Birley Moor Road: show stops within a short journey"><rect class="halo" x="379.85" y="1369.25" width="34" height="34" rx="17"/><circle cx="396.85" cy="1386.25" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1386.25" r="10.2" fill="#fff"/><circle cx="396.85" cy="1386.25" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Hackenthorpe" tabindex="0" role="button" aria-label="Hackenthorpe: show stops within a short journey"><rect class="halo" x="379.85" y="1408.9" width="34" height="34" rx="17"/><circle cx="396.85" cy="1425.9" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1425.9" r="10.2" fill="#fff"/><circle cx="396.85" cy="1425.9" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Donetsk Way" tabindex="0" role="button" aria-label="Donetsk Way: show stops within a short journey"><rect class="halo" x="379.85" y="1448.6" width="34" height="34" rx="17"/><circle cx="396.85" cy="1465.6" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1465.6" r="10.2" fill="#fff"/><circle cx="396.85" cy="1465.6" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Moss Way" tabindex="0" role="button" aria-label="Moss Way: show stops within a short journey"><rect class="halo" x="379.85" y="1488.3" width="34" height="34" rx="17"/><circle cx="396.85" cy="1505.3" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1505.3" r="10.2" fill="#fff"/><circle cx="396.85" cy="1505.3" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Crystal Peaks" tabindex="0" role="button" aria-label="Crystal Peaks: show stops within a short journey"><rect class="halo" x="379.85" y="1527.95" width="34" height="34" rx="17"/><circle cx="396.85" cy="1544.95" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1544.95" r="10.2" fill="#fff"/><circle cx="396.85" cy="1544.95" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Drake House Lane" tabindex="0" role="button" aria-label="Drake House Lane: show stops within a short journey"><rect class="halo" x="379.85" y="1584.65" width="34" height="34" rx="17"/><circle cx="396.85" cy="1601.65" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1601.65" r="10.2" fill="#fff"/><circle cx="396.85" cy="1601.65" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Waterthorpe" tabindex="0" role="button" aria-label="Waterthorpe: show stops within a short journey"><rect class="halo" x="379.85" y="1641.35" width="34" height="34" rx="17"/><circle cx="396.85" cy="1658.35" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1658.35" r="10.2" fill="#fff"/><circle cx="396.85" cy="1658.35" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Westfield" tabindex="0" role="button" aria-label="Westfield: show stops within a short journey"><rect class="halo" x="379.85" y="1681.05" width="34" height="34" rx="17"/><circle cx="396.85" cy="1698.05" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1698.05" r="10.2" fill="#fff"/><circle cx="396.85" cy="1698.05" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Halfway" tabindex="0" role="button" aria-label="Halfway: show stops within a short journey"><rect class="halo" x="379.85" y="1720.75" width="34" height="34" rx="17"/><circle cx="396.85" cy="1737.75" r="11.34" fill="#231f20"/><circle cx="396.85" cy="1737.75" r="10.2" fill="#fff"/><circle cx="396.85" cy="1737.75" r="5.67" fill="#005288"/></g>
+<g class="stn" data-name="Hyde Park" tabindex="0" role="button" aria-label="Hyde Park: show stops within a short journey"><rect class="halo" x="521.58" y="739.95" width="62.35" height="34" rx="17"/><circle cx="538.58" cy="756.95" r="11.34" fill="#231f20"/><circle cx="566.93" cy="756.95" r="11.34" fill="#231f20"/><circle cx="538.58" cy="756.95" r="10.2" fill="#fff"/><circle cx="566.93" cy="756.95" r="10.2" fill="#fff"/><circle cx="538.58" cy="756.95" r="5.67" fill="#fdb924"/><circle cx="566.93" cy="756.95" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Cricket Inn Road" tabindex="0" role="button" aria-label="Cricket Inn Road: show stops within a short journey"><rect class="halo" x="521.58" y="779.65" width="62.35" height="34" rx="17"/><circle cx="538.58" cy="796.65" r="11.34" fill="#231f20"/><circle cx="566.93" cy="796.65" r="11.34" fill="#231f20"/><circle cx="538.58" cy="796.65" r="10.2" fill="#fff"/><circle cx="566.93" cy="796.65" r="10.2" fill="#fff"/><circle cx="538.58" cy="796.65" r="5.67" fill="#fdb924"/><circle cx="566.93" cy="796.65" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Nunnery Square" tabindex="0" role="button" aria-label="Nunnery Square: show stops within a short journey"><rect class="halo" x="521.58" y="819.3" width="62.35" height="34" rx="17"/><circle cx="538.58" cy="836.3" r="11.34" fill="#231f20"/><circle cx="566.93" cy="836.3" r="11.34" fill="#231f20"/><circle cx="538.58" cy="836.3" r="10.2" fill="#fff"/><circle cx="566.93" cy="836.3" r="10.2" fill="#fff"/><circle cx="538.58" cy="836.3" r="5.67" fill="#fdb924"/><circle cx="566.93" cy="836.3" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Woodbourn Road" tabindex="0" role="button" aria-label="Woodbourn Road: show stops within a short journey"><rect class="halo" x="521.58" y="859" width="62.35" height="34" rx="17"/><circle cx="538.58" cy="876" r="11.34" fill="#231f20"/><circle cx="566.93" cy="876" r="11.34" fill="#231f20"/><circle cx="538.58" cy="876" r="10.2" fill="#fff"/><circle cx="566.93" cy="876" r="10.2" fill="#fff"/><circle cx="538.58" cy="876" r="5.67" fill="#fdb924"/><circle cx="566.93" cy="876" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Attercliffe" tabindex="0" role="button" aria-label="Attercliffe: show stops within a short journey"><rect class="halo" x="521.58" y="929.85" width="62.35" height="34" rx="17"/><circle cx="538.58" cy="946.85" r="11.34" fill="#231f20"/><circle cx="566.93" cy="946.85" r="11.34" fill="#231f20"/><circle cx="538.58" cy="946.85" r="10.2" fill="#fff"/><circle cx="566.93" cy="946.85" r="10.2" fill="#fff"/><circle cx="538.58" cy="946.85" r="5.67" fill="#fdb924"/><circle cx="566.93" cy="946.85" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Arena" tabindex="0" role="button" aria-label="Arena: show stops within a short journey"><rect class="halo" x="521.58" y="969.55" width="62.35" height="34" rx="17"/><circle cx="538.58" cy="986.55" r="11.34" fill="#231f20"/><circle cx="566.93" cy="986.55" r="11.34" fill="#231f20"/><circle cx="538.58" cy="986.55" r="10.2" fill="#fff"/><circle cx="566.93" cy="986.55" r="10.2" fill="#fff"/><circle cx="538.58" cy="986.55" r="5.67" fill="#fdb924"/><circle cx="566.93" cy="986.55" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Valley Centertainment" tabindex="0" role="button" aria-label="Valley Centertainment: show stops within a short journey"><rect class="halo" x="521.58" y="1040.4" width="62.35" height="34" rx="17"/><circle cx="538.58" cy="1057.4" r="11.34" fill="#231f20"/><circle cx="566.93" cy="1057.4" r="11.34" fill="#231f20"/><circle cx="538.58" cy="1057.4" r="10.2" fill="#fff"/><circle cx="566.93" cy="1057.4" r="10.2" fill="#fff"/><circle cx="538.58" cy="1057.4" r="5.67" fill="#fdb924"/><circle cx="566.93" cy="1057.4" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Carbrook" tabindex="0" role="button" aria-label="Carbrook: show stops within a short journey"><rect class="halo" x="521.58" y="1080.1" width="62.35" height="34" rx="17"/><circle cx="538.58" cy="1097.1" r="11.34" fill="#231f20"/><circle cx="566.93" cy="1097.1" r="11.34" fill="#231f20"/><circle cx="538.58" cy="1097.1" r="10.2" fill="#fff"/><circle cx="566.93" cy="1097.1" r="10.2" fill="#fff"/><circle cx="538.58" cy="1097.1" r="5.67" fill="#fdb924"/><circle cx="566.93" cy="1097.1" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Meadowhall South" tabindex="0" role="button" aria-label="Meadowhall South: show stops within a short journey"><rect class="halo" x="521.58" y="1119.8" width="62.35" height="34" rx="17"/><rect x="538.58" y="1131.13" width="28.35" height="11.34" fill="#231f20"/><circle cx="538.58" cy="1136.8" r="11.34" fill="#231f20"/><circle cx="566.93" cy="1136.8" r="11.34" fill="#231f20"/><rect x="538.58" y="1132.26" width="28.35" height="9.08" fill="#fff"/><circle cx="538.58" cy="1136.8" r="10.2" fill="#fff"/><circle cx="566.93" cy="1136.8" r="10.2" fill="#fff"/><circle cx="538.58" cy="1136.8" r="5.67" fill="#fdb924"/><circle cx="566.93" cy="1136.8" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Meadowhall" tabindex="0" role="button" aria-label="Meadowhall: show stops within a short journey"><rect class="halo" x="606.62" y="1210.5" width="34" height="34" rx="17"/><circle cx="623.62" cy="1227.5" r="11.34" fill="#231f20"/><circle cx="623.62" cy="1227.5" r="10.2" fill="#fff"/><circle cx="623.62" cy="1227.5" r="5.67" fill="#fdb924"/></g>
+<g class="stn" data-name="Magna" tabindex="0" role="button" aria-label="Magna: show stops within a short journey"><rect class="halo" x="549.93" y="1278.55" width="34" height="34" rx="17"/><circle cx="566.93" cy="1295.55" r="11.34" fill="#231f20"/><circle cx="566.93" cy="1295.55" r="10.2" fill="#fff"/><circle cx="566.93" cy="1295.55" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Rotherham Central" tabindex="0" role="button" aria-label="Rotherham Central: show stops within a short journey"><rect class="halo" x="549.93" y="1335.2" width="34" height="34" rx="17"/><circle cx="566.93" cy="1352.2" r="11.34" fill="#231f20"/><circle cx="566.93" cy="1352.2" r="10.2" fill="#fff"/><circle cx="566.93" cy="1352.2" r="5.67" fill="#404041"/></g>
+<g class="stn" data-name="Parkgate" tabindex="0" role="button" aria-label="Parkgate: show stops within a short journey"><rect class="halo" x="549.93" y="1374.9" width="34" height="34" rx="17"/><circle cx="566.93" cy="1391.9" r="11.34" fill="#231f20"/><circle cx="566.93" cy="1391.9" r="10.2" fill="#fff"/><circle cx="566.93" cy="1391.9" r="5.67" fill="#404041"/></g>
+</g>
+<g id="labels" fill="#231f20">
+<g class="lbl" data-name="Middlewood">
+<text class="name" id="lbl-Middlewood" x="501.7" y="19.25" text-anchor="start" dominant-baseline="central">Middlewood</text>
+<g class="icons" data-label="lbl-Middlewood" data-anchor="start" data-x="646.4">
+<use href="#ic-pr" x="646.4" y="5.87" width="28.35" height="28.35"><title>Park and Ride</title></use>
+<use href="#ic-cycle" x="680.4" y="5.87" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Leppings Lane">
+<text class="name" id="lbl-Leppings Lane" x="501.7" y="58.95" text-anchor="start" dominant-baseline="central">Leppings Lane</text>
+</g>
+<g class="lbl" data-name="Malin Bridge">
+<text class="name" id="lbl-Malin Bridge" x="377.0" y="90.1" text-anchor="end" dominant-baseline="central">Malin Bridge</text>
+<g class="icons" data-label="lbl-Malin Bridge" data-anchor="end" data-x="164.3">
+<use href="#ic-pr" x="164.3" y="76.72" width="28.35" height="28.35"><title>Park and Ride</title></use>
+<use href="#ic-cycle" x="198.3" y="76.72" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Hillsborough Park">
+<text class="name" id="lbl-Hillsborough Park" x="501.7" y="129.75" text-anchor="start" dominant-baseline="central">Hillsborough Park</text>
+</g>
+<g class="lbl" data-name="Hillsborough">
+<text class="name" id="lbl-Hillsborough" x="501.7" y="169.45" text-anchor="start" dominant-baseline="central">Hillsborough</text>
+<text class="sub" x="501.7" y="194.15" text-anchor="start" dominant-baseline="central">Interchange</text>
+<g class="icons" data-label="lbl-Hillsborough" data-anchor="start" data-x="654.7">
+<use href="#ic-bus" x="654.7" y="156.07" width="28.35" height="28.35"><title>Bus Interchange</title></use>
+<use href="#ic-cycle" x="688.7" y="156.07" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Bamforth Street">
+<text class="name" id="lbl-Bamforth Street" x="501.7" y="226.15" text-anchor="start" dominant-baseline="central">Bamforth Street</text>
+</g>
+<g class="lbl" data-name="Langsett/Primrose View">
+<text class="name" id="lbl-Langsett/Primrose View" x="501.7" y="265.85" text-anchor="start" dominant-baseline="central">Langsett/Primrose View</text>
+</g>
+<g class="lbl" data-name="Infirmary Road">
+<text class="name" id="lbl-Infirmary Road" x="501.7" y="305.55" text-anchor="start" dominant-baseline="central">Infirmary Road</text>
+</g>
+<g class="lbl" data-name="Shalesmoor for Kelham Island">
+<text class="name" id="lbl-Shalesmoor for Kelham Island" x="501.7" y="345.15" text-anchor="start" dominant-baseline="central">Shalesmoor for Kelham Island</text>
+</g>
+<g class="lbl" data-name="Netherthorpe Road">
+<text class="name" id="lbl-Netherthorpe Road" x="501.7" y="384.85" text-anchor="start" dominant-baseline="central">Netherthorpe Road</text>
+</g>
+<g class="lbl" data-name="University of Sheffield">
+<text class="name" id="lbl-University of Sheffield" x="501.7" y="424.55" text-anchor="start" dominant-baseline="central">University of Sheffield</text>
+<g class="icons" data-label="lbl-University of Sheffield" data-anchor="start" data-x="759.1">
+<use href="#ic-uni" x="759.1" y="411.18" width="28.35" height="28.35"><title>Universities/Colleges</title></use>
+<use href="#ic-hospital" x="793.1" y="411.18" width="28.35" height="28.35"><title>West End Hospitals</title></use>
+</g>
+</g>
+<g class="lbl" data-name="West Street">
+<text class="name" id="lbl-West Street" x="501.7" y="464.25" text-anchor="start" dominant-baseline="central">West Street</text>
+</g>
+<g class="lbl" data-name="City Hall">
+<text class="name" id="lbl-City Hall" x="501.7" y="503.95" text-anchor="start" dominant-baseline="central">City Hall</text>
+</g>
+<g class="lbl" data-name="Cathedral">
+<text class="name" id="lbl-Cathedral" x="530.1" y="543.65" text-anchor="start" dominant-baseline="central">Cathedral</text>
+</g>
+<g class="lbl" data-name="Castle Square">
+<text class="name" id="lbl-Castle Square" x="530.1" y="583.35" text-anchor="start" dominant-baseline="central">Castle Square</text>
+<g class="icons" data-label="lbl-Castle Square" data-anchor="start" data-x="697.8">
+<use href="#ic-bus" x="697.8" y="569.98" width="28.35" height="28.35"><title>Bus Interchange</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Fitzalan Square">
+<text class="name" id="lbl-Fitzalan Square" x="530.1" y="622.95" text-anchor="start" dominant-baseline="central">Fitzalan Square</text>
+<g class="icons" data-label="lbl-Fitzalan Square" data-anchor="start" data-x="714.8">
+<use href="#ic-bus" x="714.8" y="609.58" width="28.35" height="28.35"><title>Bus Interchange</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Sheffield Station">
+<text class="name" id="lbl-Sheffield Station" x="348.6" y="756.35" text-anchor="end" dominant-baseline="central">Sheffield Station</text>
+<g class="icons" data-label="lbl-Sheffield Station" data-anchor="end" data-x="58.2">
+<use href="#ic-bus" x="58.2" y="742.98" width="28.35" height="28.35"><title>Bus Interchange</title></use>
+<use href="#ic-train" x="92.2" y="742.98" width="28.35" height="28.35"><title>Train Interchange</title></use>
+<use href="#ic-cycle" x="126.2" y="742.98" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Granville Road">
+<text class="name" id="lbl-Granville Road" x="348.6" y="827.25" text-anchor="end" dominant-baseline="central">Granville Road</text>
+</g>
+<g class="lbl" data-name="Park Grange Croft">
+<text class="name" id="lbl-Park Grange Croft" x="348.6" y="898.1" text-anchor="end" dominant-baseline="central">Park Grange Croft</text>
+</g>
+<g class="lbl" data-name="Park Grange">
+<text class="name" id="lbl-Park Grange" x="348.6" y="937.8" text-anchor="end" dominant-baseline="central">Park Grange</text>
+</g>
+<g class="lbl" data-name="Arbourthorne Road">
+<text class="name" id="lbl-Arbourthorne Road" x="348.6" y="977.45" text-anchor="end" dominant-baseline="central">Arbourthorne Road</text>
+</g>
+<g class="lbl" data-name="Spring Lane">
+<text class="name" id="lbl-Spring Lane" x="348.6" y="1017.15" text-anchor="end" dominant-baseline="central">Spring Lane</text>
+</g>
+<g class="lbl" data-name="Manor Top">
+<text class="name" id="lbl-Manor Top" x="348.6" y="1056.85" text-anchor="end" dominant-baseline="central">Manor Top</text>
+</g>
+<g class="lbl" data-name="Hollinsend">
+<text class="name" id="lbl-Hollinsend" x="348.6" y="1096.55" text-anchor="end" dominant-baseline="central">Hollinsend</text>
+</g>
+<g class="lbl" data-name="Gleadless Townend">
+<text class="name" id="lbl-Gleadless Townend" x="348.6" y="1136.2" text-anchor="end" dominant-baseline="central">Gleadless Townend</text>
+</g>
+<g class="lbl" data-name="Herdings/">
+<text class="name" x="291.9" y="1187.85" text-anchor="end" dominant-baseline="central">Herdings/</text>
+<text class="name" x="291.9" y="1215.45" text-anchor="end" dominant-baseline="central">Leighton Road</text>
+</g>
+<g class="lbl" data-name="Herdings Park">
+<text class="name" id="lbl-Herdings Park" x="291.9" y="1255.15" text-anchor="end" dominant-baseline="central">Herdings Park</text>
+</g>
+<g class="lbl" data-name="White Lane">
+<text class="name" id="lbl-White Lane" x="377.0" y="1306.15" text-anchor="end" dominant-baseline="central">White Lane</text>
+</g>
+<g class="lbl" data-name="Birley Lane">
+<text class="name" id="lbl-Birley Lane" x="377.0" y="1345.85" text-anchor="end" dominant-baseline="central">Birley Lane</text>
+</g>
+<g class="lbl" data-name="Birley Moor Road">
+<text class="name" id="lbl-Birley Moor Road" x="377.0" y="1385.55" text-anchor="end" dominant-baseline="central">Birley Moor Road</text>
+</g>
+<g class="lbl" data-name="Hackenthorpe">
+<text class="name" id="lbl-Hackenthorpe" x="377.0" y="1425.2" text-anchor="end" dominant-baseline="central">Hackenthorpe</text>
+</g>
+<g class="lbl" data-name="Donetsk Way">
+<text class="name" id="lbl-Donetsk Way" x="377.0" y="1464.9" text-anchor="end" dominant-baseline="central">Donetsk Way</text>
+</g>
+<g class="lbl" data-name="Moss Way">
+<text class="name" id="lbl-Moss Way" x="377.0" y="1504.6" text-anchor="end" dominant-baseline="central">Moss Way</text>
+</g>
+<g class="lbl" data-name="Crystal Peaks">
+<text class="name" id="lbl-Crystal Peaks" x="377.0" y="1544.25" text-anchor="end" dominant-baseline="central">Crystal Peaks</text>
+<text class="sub" x="377.0" y="1568.95" text-anchor="end" dominant-baseline="central">Interchange</text>
+<g class="icons" data-label="lbl-Crystal Peaks" data-anchor="end" data-x="184.7">
+<use href="#ic-bus" x="184.7" y="1530.88" width="28.35" height="28.35"><title>Bus Interchange</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Drake House Lane">
+<text class="name" id="lbl-Drake House Lane" x="377.0" y="1600.95" text-anchor="end" dominant-baseline="central">Drake House Lane</text>
+<text class="sub" x="377.0" y="1625.65" text-anchor="end" dominant-baseline="central">Beighton</text>
+</g>
+<g class="lbl" data-name="Waterthorpe">
+<text class="name" id="lbl-Waterthorpe" x="377.0" y="1657.65" text-anchor="end" dominant-baseline="central">Waterthorpe</text>
+</g>
+<g class="lbl" data-name="Westfield">
+<text class="name" id="lbl-Westfield" x="377.0" y="1697.35" text-anchor="end" dominant-baseline="central">Westfield</text>
+</g>
+<g class="lbl" data-name="Halfway">
+<text class="name" id="lbl-Halfway" x="377.0" y="1737.05" text-anchor="end" dominant-baseline="central">Halfway</text>
+<g class="icons" data-label="lbl-Halfway" data-anchor="end" data-x="216.2">
+<use href="#ic-pr" x="216.2" y="1723.67" width="28.35" height="28.35"><title>Park and Ride</title></use>
+<use href="#ic-cycle" x="250.2" y="1723.67" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Hyde Park">
+<text class="name" id="lbl-Hyde Park" x="586.8" y="756.25" text-anchor="start" dominant-baseline="central">Hyde Park</text>
+</g>
+<g class="lbl" data-name="Cricket Inn Road">
+<text class="name" id="lbl-Cricket Inn Road" x="586.8" y="795.95" text-anchor="start" dominant-baseline="central">Cricket Inn Road</text>
+</g>
+<g class="lbl" data-name="Nunnery Square">
+<text class="name" id="lbl-Nunnery Square" x="586.8" y="835.6" text-anchor="start" dominant-baseline="central">Nunnery Square</text>
+<g class="icons" data-label="lbl-Nunnery Square" data-anchor="start" data-x="780.3">
+<use href="#ic-pr" x="780.3" y="822.23" width="28.35" height="28.35"><title>Park and Ride</title></use>
+<use href="#ic-cycle" x="814.3" y="822.23" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Woodbourn Road">
+<text class="name" id="lbl-Woodbourn Road" x="586.8" y="875.3" text-anchor="start" dominant-baseline="central">Woodbourn Road</text>
+</g>
+<g class="lbl" data-name="Attercliffe">
+<text class="name" id="lbl-Attercliffe" x="586.8" y="946.15" text-anchor="start" dominant-baseline="central">Attercliffe</text>
+</g>
+<g class="lbl" data-name="Arena">
+<text class="name" id="lbl-Arena" x="586.8" y="985.85" text-anchor="start" dominant-baseline="central">Arena <tspan class="sub">Olympic Legacy Park</tspan></text>
+</g>
+<g class="lbl" data-name="Valley Centertainment">
+<text class="name" id="lbl-Valley Centertainment" x="586.8" y="1056.7" text-anchor="start" dominant-baseline="central">Valley Centertainment</text>
+<g class="icons" data-label="lbl-Valley Centertainment" data-anchor="start" data-x="848.1">
+<use href="#ic-pr" x="848.1" y="1043.33" width="28.35" height="28.35"><title>Park and Ride</title></use>
+<use href="#ic-cycle" x="882.1" y="1043.33" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Carbrook">
+<text class="name" id="lbl-Carbrook" x="586.8" y="1096.4" text-anchor="start" dominant-baseline="central">Carbrook <tspan class="sub">for IKEA</tspan></text>
+<g class="icons" data-label="lbl-Carbrook" data-anchor="start" data-x="782.4">
+<use href="#ic-pr" x="782.4" y="1083.02" width="28.35" height="28.35"><title>Park and Ride</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Meadowhall South">
+<text class="name" id="lbl-Meadowhall South" x="586.8" y="1136.1" text-anchor="start" dominant-baseline="central">Meadowhall South</text>
+<text class="sub" x="586.8" y="1160.8" text-anchor="start" dominant-baseline="central">Tinsley</text>
+</g>
+<g class="lbl" data-name="Meadowhall">
+<text class="name" id="lbl-Meadowhall" x="643.5" y="1226.8" text-anchor="start" dominant-baseline="central">Meadowhall</text>
+<text class="sub" x="643.5" y="1251.5" text-anchor="start" dominant-baseline="central">Interchange</text>
+<g class="icons" data-label="lbl-Meadowhall" data-anchor="start" data-x="786.5">
+<use href="#ic-bus" x="786.5" y="1213.42" width="28.35" height="28.35"><title>Bus Interchange</title></use>
+<use href="#ic-train" x="820.5" y="1213.42" width="28.35" height="28.35"><title>Train Interchange</title></use>
+<use href="#ic-pr" x="854.5" y="1213.42" width="28.35" height="28.35"><title>Park and Ride</title></use>
+<use href="#ic-cycle" x="888.5" y="1213.42" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Magna">
+<text class="name" id="lbl-Magna" x="586.8" y="1294.85" text-anchor="start" dominant-baseline="central">Magna</text>
+<g class="icons" data-label="lbl-Magna" data-anchor="start" data-x="671.8">
+<use href="#ic-pr" x="671.8" y="1281.47" width="28.35" height="28.35"><title>Park and Ride</title></use>
+<use href="#ic-cycle" x="705.8" y="1281.47" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Rotherham Central">
+<text class="name" id="lbl-Rotherham Central" x="586.8" y="1351.5" text-anchor="start" dominant-baseline="central">Rotherham Central</text>
+<g class="icons" data-label="lbl-Rotherham Central" data-anchor="start" data-x="813.2">
+<use href="#ic-bus" x="813.2" y="1338.12" width="28.35" height="28.35"><title>Bus Interchange</title></use>
+<use href="#ic-train" x="847.2" y="1338.12" width="28.35" height="28.35"><title>Train Interchange</title></use>
+<use href="#ic-cycle" x="881.2" y="1338.12" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+<g class="lbl" data-name="Parkgate">
+<text class="name" id="lbl-Parkgate" x="586.8" y="1391.2" text-anchor="start" dominant-baseline="central">Parkgate</text>
+<g class="icons" data-label="lbl-Parkgate" data-anchor="start" data-x="697">
+<use href="#ic-pr" x="697" y="1377.83" width="28.35" height="28.35"><title>Park and Ride</title></use>
+<use href="#ic-cycle" x="731" y="1377.83" width="28.35" height="28.35"><title>Cycle Parking</title></use>
+</g>
+</g>
+</g>
+<g id="tags">
+<g class="tag" data-anchor="start" data-ax="501.7" data-stop="Leppings Lane">
+<rect class="tag-bar" x="509.1" y="79.5" width="195.8" height="28.35" rx="2.83" fill="#a2c8c8"/>
+<use href="#ic-stadium" x="501.7" y="79.5" width="28.35" height="28.35"/>
+<text class="tag-text" x="535.7" y="93.38" fill="#004645" dominant-baseline="central">Hillsborough Stadium</text>
+</g>
+<g class="tag" data-anchor="start" data-ax="530.1" data-stop="Fitzalan Square">
+<rect class="tag-bar" x="537.5" y="641.2" width="128.4" height="28.35" rx="2.83" fill="#a2c8c8"/>
+<use href="#ic-stadium" x="530.1" y="641.2" width="28.35" height="28.35"/>
+<text class="tag-text" x="564.1" y="655.08" fill="#004645" dominant-baseline="central">Ponds Forge</text>
+</g>
+<g class="tag" data-anchor="end" data-ax="351.5" data-stop="Sheffield Station">
+<rect class="tag-bar" x="118.7" y="774.5" width="232.8" height="28.35" rx="2.83" fill="#d2b6a7"/>
+<use href="#ic-uni" x="111.3" y="774.5" width="28.35" height="28.35"/>
+<text class="tag-text" x="145.3" y="788.38" fill="#57270f" dominant-baseline="central">Sheffield Hallam University</text>
+</g>
+<g class="tag" data-anchor="start" data-ax="9.1" data-stop="Granville Road">
+<rect class="tag-bar" x="16.5" y="845.4" width="131" height="28.35" rx="2.83" fill="#a2c8c8"/>
+<use href="#ic-stadium" x="9.1" y="845.4" width="28.35" height="28.35"/>
+<text class="tag-text" x="43.1" y="859.27" fill="#004645" dominant-baseline="central">Bramall Lane</text>
+</g>
+<g class="tag" data-anchor="end" data-ax="351.5" data-stop="Granville Road">
+<rect class="tag-bar" x="160.6" y="845.4" width="190.9" height="28.35" rx="2.83" fill="#d2b6a7"/>
+<use href="#ic-uni" x="153.2" y="845.4" width="28.35" height="28.35"/>
+<text class="tag-text" x="187.2" y="859.27" fill="#57270f" dominant-baseline="central">The Sheffield College</text>
+</g>
+<g class="tag" data-anchor="start" data-ax="586.8" data-stop="Woodbourn Road">
+<rect class="tag-bar" x="594.2" y="893.5" width="196.4" height="28.35" rx="2.83" fill="#a2c8c8"/>
+<use href="#ic-stadium" x="586.8" y="893.5" width="28.35" height="28.35"/>
+<text class="tag-text" x="620.8" y="907.38" fill="#004645" dominant-baseline="central">City Athletics Stadium</text>
+</g>
+<g class="tag" data-anchor="start" data-ax="586.8" data-stop="Arena">
+<rect class="tag-bar" x="594.2" y="1004" width="149.1" height="28.35" rx="2.83" fill="#a2c8c8"/>
+<use href="#ic-stadium" x="586.8" y="1004" width="28.35" height="28.35"/>
+<text class="tag-text" x="620.8" y="1017.88" fill="#004645" dominant-baseline="central">Sheffield Arena</text>
+</g>
+</g>
+<g id="key">
+<rect x="43.2" y="158.8" width="229.6" height="442.2" rx="5.6" fill="#f7f2e8"/>
+<text class="h" x="58.3" y="182" fill="#231f20" dominant-baseline="central">Routes</text>
+<path d="M61.1 212.1H100.8" stroke="#005288" stroke-width="10"/>
+<text class="k" x="106.5" y="210.4" fill="#231f20" dominant-baseline="central">Blue</text>
+<path d="M61.1 239.0H100.8" stroke="#872175" stroke-width="10"/>
+<text class="k" x="106.5" y="237.3" fill="#231f20" dominant-baseline="central">Purple</text>
+<path d="M61.1 265.8H100.8" stroke="#404041" stroke-width="10"/>
+<text class="k" x="106.5" y="264.1" fill="#231f20" dominant-baseline="central">Tram Train</text>
+<path d="M61.1 292.6H100.8" stroke="#fdb924" stroke-width="10"/>
+<text class="k" x="106.5" y="290.9" fill="#231f20" dominant-baseline="central">Yellow</text>
+<text class="h" x="58.3" y="332.75" fill="#231f20" dominant-baseline="central">Key</text>
+<rect x="61.9" y="353.7" width="195.8" height="28.35" rx="2.83" fill="#b9c9e7"/>
+<use href="#ic-bus" x="58.3" y="353.7" width="28.35" height="28.35"/>
+<text class="k" x="92.3" y="367.57" fill="#094372" dominant-baseline="central">Bus Interchange</text>
+<rect x="61.9" y="387.73" width="195.8" height="28.35" rx="2.83" fill="#f7c0ae"/>
+<use href="#ic-train" x="58.3" y="387.73" width="28.35" height="28.35"/>
+<text class="k" x="92.3" y="401.61" fill="#851310" dominant-baseline="central">Train Interchange</text>
+<rect x="61.9" y="421.76" width="195.8" height="28.35" rx="2.83" fill="#b0add6"/>
+<use href="#ic-pr" x="58.3" y="421.76" width="28.35" height="28.35"/>
+<text class="k" x="92.3" y="435.63" fill="#1e2171" dominant-baseline="central">Park and Ride</text>
+<rect x="61.9" y="455.79" width="195.8" height="28.35" rx="2.83" fill="#bcdcde"/>
+<use href="#ic-cycle" x="58.3" y="455.79" width="28.35" height="28.35"/>
+<text class="k" x="92.3" y="469.66" fill="#005e61" dominant-baseline="central">Cycle Parking</text>
+<rect x="61.9" y="489.82" width="195.8" height="28.35" rx="2.83" fill="#a2c8c8"/>
+<use href="#ic-stadium" x="58.3" y="489.82" width="28.35" height="28.35"/>
+<text class="k" x="92.3" y="503.69" fill="#004645" dominant-baseline="central">Stadiums</text>
+<rect x="61.9" y="523.85" width="195.8" height="28.35" rx="2.83" fill="#d2b6a7"/>
+<use href="#ic-uni" x="58.3" y="523.85" width="28.35" height="28.35"/>
+<text class="k" x="92.3" y="537.73" fill="#57270f" dominant-baseline="central">Universities/Colleges</text>
+<rect x="61.9" y="557.88" width="195.8" height="28.35" rx="2.83" fill="#adc8e9"/>
+<use href="#ic-hospital" x="58.3" y="557.88" width="28.35" height="28.35"/>
+<text class="k" x="92.3" y="571.75" fill="#004575" dominant-baseline="central">West End Hospitals</text>
+</g>
+</svg>
+  </div>
+  <aside id="panel">
+    <h2 id="panel-title">Short journey finder</h2>
+    <p id="panel-intro">Hover over a stop on the map to list every stop you can reach on a short journey ticket: 1 or 2 fare zones, without changing tram. Click a stop to keep it selected.</p>
+    <ol class="reach-list" id="reach-list"></ol>
+    <p class="note">A stop shown on a boundary between two shaded bands is in both fare zones.</p>
+    <p class="note">A <strong>short journey</strong> is a journey within 1 or 2 fare zones. A <strong>longer journey</strong> is a journey in more than 2 fare zones.</p>
+  </aside>
+</div>
+<script>
+// Once the web font is available, snap icons and tag bars to the measured text widths so
+// nothing overlaps or leaves a gap if the fallback font has different metrics.
+(function () {
+  const GAP = 6, STEP = 34, BOX = 28.35;
+  function layout() {
+    document.querySelectorAll('g.icons').forEach(g => {
+      const t = document.getElementById(g.dataset.label);
+      if (!t) return;
+      const bb = t.getBBox();
+      const uses = g.querySelectorAll('use');
+      let x0;
+      if (g.dataset.anchor === 'start') x0 = bb.x + bb.width + GAP;
+      else x0 = bb.x - GAP - (uses.length - 1) * STEP - BOX;
+      uses.forEach((u, i) => u.setAttribute('x', (x0 + i * STEP).toFixed(2)));
+    });
+    document.querySelectorAll('g.tag').forEach(g => {
+      const text = g.querySelector('.tag-text'), bar = g.querySelector('.tag-bar'), icon = g.querySelector('use');
+      const w = text.getComputedTextLength();
+      const ax = parseFloat(g.dataset.ax);
+      let x0 = g.dataset.anchor === 'start' ? ax : ax - (34 + w + GAP);
+      icon.setAttribute('x', x0.toFixed(2));
+      text.setAttribute('x', (x0 + 34).toFixed(2));
+      bar.setAttribute('x', (x0 + 7.4).toFixed(2));
+      bar.setAttribute('width', (34 + w + GAP - 7.4).toFixed(2));
+    });
+  }
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout); else layout();
+})();
+
+// Short-journey finder. The network is a tree, so each pair of stops has one path; a stop is
+// within a short journey when that path crosses no more than two distinct fare zones.
+(function () {
+  const NET = {"stops":{"Middlewood":{"zones":[1],"name":"Middlewood"},"Leppings Lane":{"zones":[1],"name":"Leppings Lane"},"Malin Bridge":{"zones":[1],"name":"Malin Bridge"},"Hillsborough Park":{"zones":[1],"name":"Hillsborough Park"},"Hillsborough":{"zones":[1],"name":"Hillsborough"},"Bamforth Street":{"zones":[1],"name":"Bamforth Street"},"Langsett/Primrose View":{"zones":[1],"name":"Langsett/Primrose View"},"Infirmary Road":{"zones":[1,2],"name":"Infirmary Road"},"Shalesmoor for Kelham Island":{"zones":[2],"name":"Shalesmoor for Kelham Island"},"Netherthorpe Road":{"zones":[2],"name":"Netherthorpe Road"},"University of Sheffield":{"zones":[2,3],"name":"University of Sheffield"},"West Street":{"zones":[3],"name":"West Street"},"City Hall":{"zones":[3],"name":"City Hall"},"Cathedral":{"zones":[3],"name":"Cathedral"},"Castle Square":{"zones":[3],"name":"Castle Square"},"Fitzalan Square":{"zones":[3],"name":"Fitzalan Square"},"Sheffield Station":{"zones":[3],"name":"Sheffield Station"},"Granville Road":{"zones":[3,8],"name":"Granville Road"},"Park Grange Croft":{"zones":[8],"name":"Park Grange Croft"},"Park Grange":{"zones":[8],"name":"Park Grange"},"Arbourthorne Road":{"zones":[8],"name":"Arbourthorne Road"},"Spring Lane":{"zones":[8,9],"name":"Spring Lane"},"Manor Top":{"zones":[9],"name":"Manor Top"},"Hollinsend":{"zones":[9],"name":"Hollinsend"},"Gleadless Townend":{"zones":[9],"name":"Gleadless Townend"},"Herdings/":{"zones":[9],"name":"Herdings/Leighton Road"},"Herdings Park":{"zones":[9],"name":"Herdings Park"},"White Lane":{"zones":[9,10],"name":"White Lane"},"Birley Lane":{"zones":[10],"name":"Birley Lane"},"Birley Moor Road":{"zones":[10],"name":"Birley Moor Road"},"Hackenthorpe":{"zones":[10],"name":"Hackenthorpe"},"Donetsk Way":{"zones":[10],"name":"Donetsk Way"},"Moss Way":{"zones":[10],"name":"Moss Way"},"Crystal Peaks":{"zones":[10,11],"name":"Crystal Peaks"},"Drake House Lane":{"zones":[11],"name":"Drake House Lane"},"Waterthorpe":{"zones":[11],"name":"Waterthorpe"},"Westfield":{"zones":[11],"name":"Westfield"},"Halfway":{"zones":[11],"name":"Halfway"},"Hyde Park":{"zones":[3,4],"name":"Hyde Park"},"Cricket Inn Road":{"zones":[4],"name":"Cricket Inn Road"},"Nunnery Square":{"zones":[4,5],"name":"Nunnery Square"},"Woodbourn Road":{"zones":[5],"name":"Woodbourn Road"},"Attercliffe":{"zones":[5],"name":"Attercliffe"},"Arena":{"zones":[5,6],"name":"Arena"},"Valley Centertainment":{"zones":[6],"name":"Valley Centertainment"},"Carbrook":{"zones":[6],"name":"Carbrook"},"Meadowhall South":{"zones":[6,7],"name":"Meadowhall South"},"Meadowhall":{"zones":[6],"name":"Meadowhall"},"Magna":{"zones":[7],"name":"Magna"},"Rotherham Central":{"zones":[7],"name":"Rotherham Central"},"Parkgate":{"zones":[7],"name":"Parkgate"}},"hops":[["Leppings Lane","Middlewood",1],["Hillsborough Park","Leppings Lane",1],["Hillsborough","Hillsborough Park",1],["Bamforth Street","Hillsborough",1],["Bamforth Street","Langsett/Primrose View",1],["Infirmary Road","Langsett/Primrose View",1],["Infirmary Road","Shalesmoor for Kelham Island",2],["Netherthorpe Road","Shalesmoor for Kelham Island",2],["Netherthorpe Road","University of Sheffield",2],["University of Sheffield","West Street",3],["City Hall","West Street",3],["Cathedral","City Hall",3],["Castle Square","Cathedral",3],["Castle Square","Fitzalan Square",3],["Fitzalan Square","Hyde Park",3],["Cricket Inn Road","Hyde Park",4],["Cricket Inn Road","Nunnery Square",4],["Nunnery Square","Woodbourn Road",5],["Attercliffe","Woodbourn Road",5],["Arena","Attercliffe",5],["Arena","Valley Centertainment",6],["Carbrook","Valley Centertainment",6],["Carbrook","Meadowhall South",6],["Meadowhall","Meadowhall South",6],["Hillsborough","Malin Bridge",1],["Fitzalan Square","Sheffield Station",3],["Granville Road","Sheffield Station",3],["Granville Road","Park Grange Croft",8],["Park Grange","Park Grange Croft",8],["Arbourthorne Road","Park Grange",8],["Arbourthorne Road","Spring Lane",8],["Manor Top","Spring Lane",9],["Hollinsend","Manor Top",9],["Gleadless Townend","Hollinsend",9],["Gleadless Townend","White Lane",9],["Birley Lane","White Lane",10],["Birley Lane","Birley Moor Road",10],["Birley Moor Road","Hackenthorpe",10],["Donetsk Way","Hackenthorpe",10],["Donetsk Way","Moss Way",10],["Crystal Peaks","Moss Way",10],["Crystal Peaks","Drake House Lane",11],["Drake House Lane","Waterthorpe",11],["Waterthorpe","Westfield",11],["Halfway","Westfield",11],["Gleadless Townend","Herdings/",9],["Herdings Park","Herdings/",9],["Magna","Meadowhall South",7],["Magna","Rotherham Central",7],["Parkgate","Rotherham Central",7]],"lines":{"Yellow":["Middlewood","Leppings Lane","Hillsborough Park","Hillsborough","Bamforth Street","Langsett/Primrose View","Infirmary Road","Shalesmoor for Kelham Island","Netherthorpe Road","University of Sheffield","West Street","City Hall","Cathedral","Castle Square","Fitzalan Square","Hyde Park","Cricket Inn Road","Nunnery Square","Woodbourn Road","Attercliffe","Arena","Valley Centertainment","Carbrook","Meadowhall South","Meadowhall"],"Blue":["Malin Bridge","Hillsborough","Bamforth Street","Langsett/Primrose View","Infirmary Road","Shalesmoor for Kelham Island","Netherthorpe Road","University of Sheffield","West Street","City Hall","Cathedral","Castle Square","Fitzalan Square","Sheffield Station","Granville Road","Park Grange Croft","Park Grange","Arbourthorne Road","Spring Lane","Manor Top","Hollinsend","Gleadless Townend","White Lane","Birley Lane","Birley Moor Road","Hackenthorpe","Donetsk Way","Moss Way","Crystal Peaks","Drake House Lane","Waterthorpe","Westfield","Halfway"],"Purple":["Cathedral","Castle Square","Fitzalan Square","Sheffield Station","Granville Road","Park Grange Croft","Park Grange","Arbourthorne Road","Spring Lane","Manor Top","Hollinsend","Gleadless Townend","Herdings/","Herdings Park"],"Tram Train":["Cathedral","Castle Square","Fitzalan Square","Hyde Park","Cricket Inn Road","Nunnery Square","Woodbourn Road","Attercliffe","Arena","Valley Centertainment","Carbrook","Meadowhall South","Magna","Rotherham Central","Parkgate"]},"lineColours":{"Blue":"#005288","Purple":"#872175","Tram Train":"#404041","Yellow":"#fdb924"}};
+  const MAX_ZONES = 2;
+  const svg = document.querySelector('.map svg');
+  const status = document.getElementById('status');
+  const DEFAULT = status.innerHTML;
+  const adj = {};
+  NET.hops.forEach(([a, b, z]) => {
+    (adj[a] = adj[a] || []).push([b, z]);
+    (adj[b] = adj[b] || []).push([a, z]);
+  });
+  const stnEls = {}, lblEls = {};
+  svg.querySelectorAll('g.stn').forEach(g => stnEls[g.dataset.name] = g);
+  svg.querySelectorAll('g.lbl').forEach(g => lblEls[g.dataset.name] = g);
+  const tagEls = [...svg.querySelectorAll('g.tag')];
+  const zoneEls = {};
+  svg.querySelectorAll('.zone').forEach(p => zoneEls[p.dataset.zone] = [p]);
+  svg.querySelectorAll('#zones .zone-num').forEach(t => zoneEls[t.textContent].push(t));
+
+  const ALLOW_CHANGES = false;  // true: any route counts; false: a journey must stay on one tram
+  const hopZone = {};
+  NET.hops.forEach(([a, b, z]) => { hopZone[a + '|' + b] = z; hopZone[b + '|' + a] = z; });
+
+  function reachable(origin) {
+    // returns {stop: {zones: Set of zones crossed, hops: stops travelled, lines: Set of lines}}
+    // for every stop within MAX_ZONES of the origin
+    const seen = { [origin]: { zones: new Set(), hops: 0, lines: new Set() } };
+    if (ALLOW_CHANGES) {
+      // breadth-first walk over the whole network, carrying the zones used so far
+      const queue = [origin];
+      while (queue.length) {
+        const cur = queue.shift();
+        for (const [next, z] of adj[cur] || []) {
+          if (next in seen) continue;
+          const zones = new Set(seen[cur].zones); zones.add(z);
+          if (zones.size > MAX_ZONES) continue;
+          seen[next] = { zones, hops: seen[cur].hops + 1, lines: new Set() };
+          queue.push(next);
+        }
+      }
+      return seen;
+    }
+    // single tram: walk each line that serves the origin, outwards in both directions
+    for (const [line, stops] of Object.entries(NET.lines)) {
+      const i = stops.indexOf(origin);
+      if (i < 0) continue;
+      for (const step of [-1, 1]) {
+        const zones = new Set();
+        for (let j = i + step; j >= 0 && j < stops.length; j += step) {
+          zones.add(hopZone[stops[j - step] + '|' + stops[j]]);
+          if (zones.size > MAX_ZONES) break;
+          const prev = seen[stops[j]];
+          if (!prev || prev.zones.size > zones.size) seen[stops[j]] = { zones: new Set(zones), hops: Math.abs(j - i), lines: new Set() };
+          seen[stops[j]].lines.add(line);
+        }
+      }
+    }
+    return seen;
+  }
+
+  const panelTitle = document.getElementById('panel-title');
+  const panelIntro = document.getElementById('panel-intro');
+  const reachList = document.getElementById('reach-list');
+  const PANEL_TITLE = panelTitle.textContent, PANEL_INTRO = panelIntro.innerHTML;
+  function fillPanel(origin, reach, n, zoneText) {
+    panelTitle.textContent = 'From ' + NET.stops[origin].name;
+    panelIntro.innerHTML = '<strong>' + n + ' stops</strong> on a short journey ticket, reaching into fare ' + zoneText + '. Nearest first.';
+    const items = Object.entries(reach).filter(([k]) => k !== origin)
+      .sort((a, b) => a[1].hops - b[1].hops || NET.stops[a[0]].name.localeCompare(NET.stops[b[0]].name));
+    reachList.innerHTML = items.map(([k, r]) => {
+      const dots = [...r.lines].sort().map(l => '<i style="background:' + NET.lineColours[l] + '" title="' + l + '"></i>').join('');
+      const zs = NET.stops[k].zones;
+      return '<li class="rl"><span class="rl-lines">' + dots + '</span><span class="rl-name">' + NET.stops[k].name + '</span>'
+        + '<span class="rl-zone' + (zs.length > 1 ? ' two' : '') + '" title="Fare zone">' + zs.join(' / ') + '</span></li>';
+    }).join('');
+  }
+  function resetPanel() {
+    panelTitle.textContent = PANEL_TITLE;
+    panelIntro.innerHTML = PANEL_INTRO;
+    reachList.innerHTML = '';
+  }
+
+  let pinned = null, current = null;
+  function show(origin) {
+    if (origin === current) return;
+    current = origin;
+    const reach = reachable(origin);
+    const zonesUsed = new Set();
+    Object.values(reach).forEach(s => s.zones.forEach(z => zonesUsed.add(z)));
+    if (zonesUsed.size === 0) NET.stops[origin].zones.forEach(z => zonesUsed.add(z));
+    svg.classList.add('active');
+    for (const k in stnEls) {
+      const on = k in reach;
+      stnEls[k].classList.toggle('reach', on);
+      stnEls[k].classList.toggle('origin', k === origin);
+      if (lblEls[k]) lblEls[k].classList.toggle('reach', on);
+    }
+    tagEls.forEach(t => t.classList.toggle('reach', t.dataset.stop in reach));
+    for (const z in zoneEls) zoneEls[z].forEach(el => el.classList.toggle('lit', zonesUsed.has(+z)));
+    const n = Object.keys(reach).length - 1;
+    const zl = [...zonesUsed].sort((a, b) => a - b);
+    const zoneText = zl.length === 1 ? 'zone ' + zl[0] : 'zones ' + zl.slice(0, -1).join(', ') + ' and ' + zl[zl.length - 1];
+    status.innerHTML = 'From <strong>' + NET.stops[origin].name + '</strong>: ' + n + ' stops are within a short journey on one tram, reaching into fare ' + zoneText + '.'
+      + (pinned ? ' <button type="button" class="clear">Clear</button>' : '');
+    fillPanel(origin, reach, n, zoneText);
+  }
+  function clear() {
+    current = null;
+    svg.classList.remove('active');
+    svg.querySelectorAll('.reach, .origin, .lit').forEach(el => el.classList.remove('reach', 'origin', 'lit'));
+    status.innerHTML = DEFAULT;
+    resetPanel();
+  }
+  function keyOf(target) {
+    const g = target.closest && target.closest('g.stn, g.lbl');
+    return g ? g.dataset.name : null;
+  }
+
+  svg.addEventListener('pointerover', e => {
+    if (e.pointerType !== 'mouse' || pinned) return;
+    const k = keyOf(e.target);
+    if (k) show(k);
+  });
+  svg.addEventListener('pointerout', e => {
+    if (e.pointerType !== 'mouse' || pinned) return;
+    const k = keyOf(e.target);
+    if (k && keyOf(e.relatedTarget || document.body) !== k) clear();
+  });
+  svg.addEventListener('click', e => {
+    const k = keyOf(e.target);
+    if (k && k !== pinned) { pinned = k; current = null; show(k); }
+    else { pinned = null; clear(); }
+  });
+  svg.addEventListener('keydown', e => {
+    const k = keyOf(e.target);
+    if (!k) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.target.closest('g.stn').dispatchEvent(new MouseEvent('click', { bubbles: true })); }
+    if (e.key === 'Escape') { pinned = null; clear(); }
+  });
+  svg.addEventListener('focusin', e => { const k = keyOf(e.target); if (k && !pinned) show(k); });
+  svg.addEventListener('focusout', e => { if (!pinned) clear(); });
+  status.addEventListener('click', e => { if (e.target.classList.contains('clear')) { pinned = null; clear(); } });
+})();
+</script>
+</body>
+</html>
